@@ -1,20 +1,39 @@
-// ElevenLabs Text-to-Speech — Rachel voice
-// Voice ID: 21m00Tcm4TlvDq8ikWAM
+// Text-to-Speech
+// Primary: ElevenLabs (Rachel voice) — requires VITE_ELEVENLABS_API_KEY
+// Fallback: Web Speech API (native browser, no key needed)
 
-const API_KEY  = import.meta.env.VITE_ELEVENLABS_API_KEY as string;
+const API_KEY  = import.meta.env.VITE_ELEVENLABS_API_KEY as string | undefined;
 const VOICE_ID = '21m00Tcm4TlvDq8ikWAM'; // Rachel
 const API_URL  = `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`;
 
 const audioCache = new Map<string, string>();
 let currentAudio: HTMLAudioElement | null = null;
 
+// ── Web Speech API fallback ────────────────────────────────
+function speakNative(text: string): void {
+  if (!('speechSynthesis' in window)) return;
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang  = 'en-US';
+  utter.rate  = 1.0;
+  utter.pitch = 1.0;
+  // Try to pick a natural English voice if available
+  const voices = window.speechSynthesis.getVoices();
+  const preferred = voices.find(v =>
+    v.lang === 'en-US' && (v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('Karen'))
+  ) ?? voices.find(v => v.lang.startsWith('en'));
+  if (preferred) utter.voice = preferred;
+  window.speechSynthesis.speak(utter);
+}
+
+// ── ElevenLabs ─────────────────────────────────────────────
 async function fetchAudio(text: string): Promise<string> {
   if (audioCache.has(text)) return audioCache.get(text)!;
 
   const response = await fetch(API_URL, {
     method: 'POST',
     headers: {
-      'xi-api-key': API_KEY,
+      'xi-api-key': API_KEY!,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
@@ -40,8 +59,15 @@ async function fetchAudio(text: string): Promise<string> {
   return url;
 }
 
+// ── Main speak function ────────────────────────────────────
 export async function speak(text: string): Promise<void> {
-  if (!API_KEY) { console.warn('[Voice] No API key set'); return; }
+  // No ElevenLabs key → use native Web Speech API
+  if (!API_KEY) {
+    speakNative(text);
+    return;
+  }
+
+  // ElevenLabs available → use it, fall back to native on error
   try {
     if (currentAudio) { currentAudio.pause(); currentAudio.currentTime = 0; }
     const url   = await fetchAudio(text);
@@ -49,29 +75,25 @@ export async function speak(text: string): Promise<void> {
     currentAudio = audio;
     await audio.play();
   } catch (e) {
-    console.warn('[Voice] Could not play audio:', e);
+    console.warn('[Voice] ElevenLabs failed, falling back to Web Speech:', e);
+    speakNative(text);
   }
 }
 
 // ── Phrases ────────────────────────────────────────────────
 export const phrases = {
-  // Al detectar la seña de una letra (cada intento correcto confirmado)
   letterDetected: (letter: string) =>
     `Letter ${letter}.`,
 
-  // Al completar la letra (5 intentos correctos) y desbloquear la siguiente
   letterUnlocked: (letter: string) =>
     `Excellent! You unlocked letter ${letter}. Keep going!`,
 
-  // Al completar una letra en examen
   examLetterCorrect: (letter: string) =>
     `Letter ${letter}, correct!`,
 
-  // Al completar una palabra en Practice o Exam
   wordCompleted: (word: string) =>
     `Great job! You spelled ${word}!`,
 
-  // Al terminar el examen
   examFinished: (score: number) =>
     score === 100
       ? `Perfect! You finished the exam with a perfect score!`

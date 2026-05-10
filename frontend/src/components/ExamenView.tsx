@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle2, XCircle, Trophy, RefreshCw } from 'lucide-react';
 import { useLetter } from '../context/LetterContext';
@@ -30,6 +30,7 @@ export default function ExamenView() {
   const [attempts, setAttempts]       = useState(0);
   const [finished, setFinished]       = useState(false);
   const [feedback, setFeedback]       = useState<'correct' | 'wrong' | null>(null);
+  const lastConfirmedId               = useRef(0);
 
   const startExam = () => {
     const words    = getRandomWords(unlocked, WORDS_PER_EXAM);
@@ -78,7 +79,14 @@ export default function ExamenView() {
   };
 
   useEffect(() => {
-    if (!detection.detected || !currentLetter || finished || feedback) return;
+    if (
+      detection.confirmedId === 0 ||
+      detection.confirmedId === lastConfirmedId.current ||
+      !currentLetter || finished || feedback
+    ) return;
+
+    lastConfirmedId.current = detection.confirmedId;
+
     if (detection.letter === currentLetter) {
       speak(phrases.examLetterCorrect(currentLetter));
       setFeedback('correct');
@@ -91,7 +99,7 @@ export default function ExamenView() {
         advance('failed');
       }
     }
-  }, [detection]);
+  }, [detection.confirmedId]);
 
   if (finished) {
     return (

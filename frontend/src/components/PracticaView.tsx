@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { RefreshCw, CheckCircle2 } from 'lucide-react';
 import { useLetter } from '../context/LetterContext';
@@ -32,26 +32,43 @@ export default function PracticaView() {
   const currentLetter = currentWord[letterIndex] ?? '';
   const letterData    = ALPHABET.find(l => l.letter === currentLetter);
 
+  // Track the last confirmedId we already processed so we never handle the same event twice
+  const lastConfirmedId = useRef(0);
+  const processingRef   = useRef(false); // guard against re-entry during the 800ms timeout
+
   useEffect(() => {
-    if (!detection.detected || !currentLetter) return;
-    if (detection.letter === currentLetter) {
-      setShowSuccess(true);
-      setTimeout(() => {
-        setShowSuccess(false);
-        if (letterIndex + 1 < currentWord.length) {
-          setLetterIndex(i => i + 1);
+    // Only react to a NEW confirmed detection (confirmedId changed and > 0)
+    if (
+      detection.confirmedId === 0 ||
+      detection.confirmedId === lastConfirmedId.current ||
+      processingRef.current ||
+      !currentLetter
+    ) return;
+
+    // Wrong letter — ignore
+    if (detection.letter !== currentLetter) return;
+
+    // Mark this event as handled immediately
+    lastConfirmedId.current = detection.confirmedId;
+    processingRef.current   = true;
+
+    setShowSuccess(true);
+    setTimeout(() => {
+      setShowSuccess(false);
+      processingRef.current = false;
+      if (letterIndex + 1 < currentWord.length) {
+        setLetterIndex(i => i + 1);
+      } else {
+        speak(phrases.wordCompleted(currentWord));
+        if (wordIndex + 1 < words.length) {
+          setWordIndex(w => w + 1);
+          setLetterIndex(0);
         } else {
-          speak(phrases.wordCompleted(currentWord));
-          if (wordIndex + 1 < words.length) {
-            setWordIndex(w => w + 1);
-            setLetterIndex(0);
-          } else {
-            generateWords();
-          }
+          generateWords();
         }
-      }, 800);
-    }
-  }, [detection]);
+      }
+    }, 800);
+  }, [detection.confirmedId]);
 
   if (words.length === 0) {
     return (

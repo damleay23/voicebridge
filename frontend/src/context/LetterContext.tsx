@@ -16,6 +16,7 @@ export interface DetectionResult {
   letter: string;
   confidence: number;
   detected: boolean;
+  confirmedId: number; // increments each time a new confirmation fires — 0 = none
 }
 
 export interface Landmark {
@@ -68,7 +69,7 @@ interface LetterContextType {
 }
 
 const LetterContext = createContext<LetterContextType | null>(null);
-const MOCK_DETECTION: DetectionResult = { letter: '', confidence: 0, detected: false };
+const MOCK_DETECTION: DetectionResult = { letter: '', confidence: 0, detected: false, confirmedId: 0 };
 
 export function LetterProvider({ children }: { children: ReactNode }) {
   // ── State ─────────────────────────────────────────────────
@@ -99,7 +100,9 @@ export function LetterProvider({ children }: { children: ReactNode }) {
   const landmarkerReadyRef = useRef(false);
   const modelRef           = useRef<{ predict: (t: tf.Tensor) => tf.Tensor } | null>(null);
   const classesRef         = useRef<string[]>([]);
+  const confirmedIdRef     = useRef<number>(0); // monotonic counter for confirmed detections
   const streakBufRef       = useRef<string[]>([]);   // confirmation streak buffer
+
   const lastDetectionTs    = useRef<number>(0);
 
   const level           = calcLevel(xp);
@@ -373,7 +376,6 @@ export function LetterProvider({ children }: { children: ReactNode }) {
         streakBufRef.current = [];
         return;
       }
-
       const lms = result.landmarks[0];
       setHandDetected(true);
       setLandmarks(lms);
@@ -397,9 +399,10 @@ export function LetterProvider({ children }: { children: ReactNode }) {
 
       // Update detection display
       setDetection({
-        letter:     label,
-        confidence: confidence,
-        detected:   confidence >= CONFIDENCE_THRESHOLD,
+        letter:      label,
+        confidence:  confidence,
+        detected:    confidence >= CONFIDENCE_THRESHOLD,
+        confirmedId: 0, // not confirmed yet — updated below when streak completes
       });
 
       // Confirmation streak logic (same as server.py)
@@ -410,6 +413,15 @@ export function LetterProvider({ children }: { children: ReactNode }) {
 
         if (buf.length === CONFIRM_STREAK && new Set(buf).size === 1) {
           streakBufRef.current = [];
+          // Increment confirmedId so consumers can detect a NEW confirmation event
+          const newId = confirmedIdRef.current + 1;
+          confirmedIdRef.current = newId;
+          setDetection({
+            letter:      label,
+            confidence:  confidence,
+            detected:    true,
+            confirmedId: newId,
+          });
           handleConfirmedDetection(label, confidence);
         }
       } else {

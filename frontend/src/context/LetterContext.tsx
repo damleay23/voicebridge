@@ -48,6 +48,9 @@ interface LetterContextType {
   goToNext: () => void;
   goToPrev: () => void;
   detection: DetectionResult;
+  // Raw per-frame prediction — no streak, no cooldown. Use this in Practice/Exam
+  // to build independent confirmation logic per mode.
+  rawPrediction: { letter: string; confidence: number } | null;
   correctAttempts: number;
   requiredCorrect: number;
   xp: number;
@@ -62,7 +65,7 @@ interface LetterContextType {
   dismissNotification: (id: string) => void;
   stream: MediaStream | null;
   cameraActive: boolean;
-  wsConnected: boolean;   // kept for UI compat — now means "model ready"
+  wsConnected: boolean;
   handDetected: boolean;
   toggleCamera: () => void;
   landmarks: Landmark[];
@@ -88,6 +91,7 @@ export function LetterProvider({ children }: { children: ReactNode }) {
   const [modelReady, setModelReady]             = useState(false);
   const [handDetected, setHandDetected]         = useState(false);
   const [landmarks, setLandmarks]               = useState<Landmark[]>([]);
+  const [rawPrediction, setRawPrediction]       = useState<{ letter: string; confidence: number } | null>(null);
 
   // Refs
   const activeIndexRef     = useRef(1);
@@ -372,6 +376,7 @@ export function LetterProvider({ children }: { children: ReactNode }) {
       if (!result.landmarks || result.landmarks.length === 0) {
         setHandDetected(false);
         setDetection(MOCK_DETECTION);
+        setRawPrediction(null);
         setLandmarks([]);
         streakBufRef.current = [];
         return;
@@ -393,9 +398,13 @@ export function LetterProvider({ children }: { children: ReactNode }) {
       inputTensor.dispose();
       predTensor.dispose();
 
-      const maxIdx    = predArray.indexOf(Math.max(...Array.from(predArray)));
+      const maxIdx     = predArray.indexOf(Math.max(...Array.from(predArray)));
       const confidence = predArray[maxIdx];
-      const label     = classesRef.current[maxIdx] ?? '';
+      const label      = classesRef.current[maxIdx] ?? '';
+
+      // Always publish the raw per-frame prediction (no streak, no cooldown)
+      // so Practice/Exam can build their own independent confirmation logic
+      setRawPrediction({ letter: label, confidence });
 
       // Update detection display
       setDetection({
@@ -447,7 +456,8 @@ export function LetterProvider({ children }: { children: ReactNode }) {
       activeLetter: ALPHABET[activeIndex],
       setActiveLetter, completedLetters,
       goToNext, goToPrev,
-      detection, correctAttempts, requiredCorrect: REQUIRED_CORRECT,
+      detection, rawPrediction,
+      correctAttempts, requiredCorrect: REQUIRED_CORRECT,
       xp, streak, level, progressPercent,
       unlockedAchievements, examsCompleted, examsPerfect, onExamCompleted,
       notifications, dismissNotification,

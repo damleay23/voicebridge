@@ -7,8 +7,13 @@ import { ALPHABET } from '../data/alphabet';
 import CameraFeed from './CameraFeed';
 import { speak, phrases } from '../hooks/useVoice';
 
+// Independent confirmation settings for Practice mode
+const PRACTICE_STREAK     = 5;    // consecutive same predictions needed
+const PRACTICE_CONFIDENCE = 0.75; // minimum confidence per frame
+const PRACTICE_COOLDOWN   = 2000; // ms to wait after a correct letter before accepting next
+
 export default function PracticaView() {
-  const { completedLetters, detection } = useLetter();
+  const { completedLetters, rawPrediction } = useLetter();
 
   const unlocked = completedLetters.length > 0
     ? completedLetters
@@ -19,56 +24,91 @@ export default function PracticaView() {
   const [letterIndex, setLetterIndex] = useState(0);
   const [showSuccess, setShowSuccess] = useState(false);
 
+  // Local streak buffer — completely independent of Learn mode
+  const streakRef      = useRef<string[]>([]);
+  const cooldownRef    = useRef<number>(0);   // timestamp of last accepted letter
+  const processingRef  = useRef(false);       // true while the 800ms success animation plays
+
   const generateWords = () => {
     const w = getRandomWords(unlocked, 10);
     setWords(w.length > 0 ? w : ['SOL', 'MAR', 'LUZ']);
     setWordIndex(0);
     setLetterIndex(0);
+    streakRef.current   = [];
+    cooldownRef.current = 0;
+    processingRef.current = false;
   };
 
   useEffect(() => { generateWords(); }, [completedLetters.length]);
 
+  // Reset streak whenever the target letter changes
   const currentWord   = words[wordIndex] ?? '';
   const currentLetter = currentWord[letterIndex] ?? '';
   const letterData    = ALPHABET.find(l => l.letter === currentLetter);
 
-  // Track the last confirmedId we already processed so we never handle the same event twice
-  const lastConfirmedId = useRef(0);
-  const processingRef   = useRef(false); // guard against re-entry during the 800ms timeout
-
+  const prevLetterRef = useRef('');
   useEffect(() => {
-    // Only react to a NEW confirmed detection (confirmedId changed and > 0)
-    if (
-      detection.confirmedId === 0 ||
-      detection.confirmedId === lastConfirmedId.current ||
-      processingRef.current ||
-      !currentLetter
-    ) return;
+    if (currentLetter !== prevLetterRef.current) {
+      prevLetterRef.current = currentLetter;
+      streakRef.current     = [];
+    }
+  }, [currentLetter]);
 
-    // Wrong letter — ignore
-    if (detection.letter !== currentLetter) return;
+  // Process every raw frame prediction independently
+  useEffect(() => {
+    if (!rawPrediction || !currentLetter || processingRef.current) return;
 
-    // Mark this event as handled immediately
-    lastConfirmedId.current = detection.confirmedId;
-    processingRef.current   = true;
+    // Cooldown between accepted letters
+    if (Date.now() - cooldownRef.current < PRACTICE_COOLDOWN) return;
 
-    setShowSuccess(true);
-    setTimeout(() => {
-      setShowSuccess(false);
-      processingRef.current = false;
-      if (letterIndex + 1 < currentWord.length) {
-        setLetterIndex(i => i + 1);
-      } else {
-        speak(phrases.wordCompleted(currentWord));
-        if (wordIndex + 1 < words.length) {
-          setWordIndex(w => w + 1);
-          setLetterIndex(0);
-        } else {
-          generateWords();
-        }
+    const { letter, confidence } = rawPrediction;
+
+    if (confidence >= PRACTICE_CONFIDENCE) {
+      const buf = streakRef.current;
+      buf.push(letter);
+      if (buf.length > PRACTICE_STREAK) buf.shift();
+
+      // Only confirm if the streak is full AND all predictions match the target
+      if (
+        buf.length === PRACTICE_STREAK &&
+        new Set(buf).size === 1 &&
+        buf[0] === currentLetter
+      ) {
+        // Confirmed — reset streak and start cooldown immediately
+        streakRef.current   = [];
+        cooldownRef.current = Date.now();
+        processingRef.current = true;
+
+        setShowSuccess(true);
+        setTimeout(() => {
+          setShowSuccess(false);
+          processingRef.current = false;
+          setLetterIndex(prev => {
+            const nextIdx = prev + 1;
+            if (nextIdx < currentWord.length) {
+              return nextIdx;
+            } else {
+              // Word completed
+              speak(phrases.wordCompleted(currentWord));
+              setWordIndex(wi => {
+                const nextWord = wi + 1;
+                if (nextWord < words.length) {
+                  return nextWord;
+                } else {
+                  generateWords();
+                  return wi;
+                }
+              });
+              return 0;
+            }
+          });
+        }, 800);
       }
-    }, 800);
-  }, [detection.confirmedId]);
+    } else {
+      // Low confidence — reset streak
+      streakRef.current = [];
+    }
+  }, [rawPrediction]);
 
   if (words.length === 0) {
     return (
@@ -113,9 +153,8 @@ export default function PracticaView() {
         ))}
       </div>
 
-      {/* Camera + reference — stacked on mobile, side by side on desktop */}
+      {/* Camera + reference */}
       <div className="flex-1 flex flex-col md:flex-row gap-3 md:gap-6 min-h-0">
-        {/* Camera */}
         <div className="flex-1 min-h-0" style={{ minHeight: '200px' }}>
           <CameraFeed>
             <AnimatePresence>
@@ -133,7 +172,6 @@ export default function PracticaView() {
           </CameraFeed>
         </div>
 
-        {/* Reference panel — row on mobile, column on desktop */}
         <div className="flex flex-row md:flex-col md:w-64 lg:w-72 gap-3 flex-shrink-0">
           <div className="bg-bg-card border border-white/10 rounded-2xl p-3 md:p-4 flex flex-col items-center justify-center space-y-1 flex-shrink-0">
             <span className="text-[9px] md:text-[10px] font-bold text-brand-purple uppercase tracking-widest">Make this sign</span>

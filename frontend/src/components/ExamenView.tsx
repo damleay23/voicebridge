@@ -9,6 +9,8 @@ import { speak, phrases } from '../hooks/useVoice';
 
 const MAX_ATTEMPTS   = 3;
 const WORDS_PER_EXAM = 5;
+const EXAM_STREAK     = 5;
+const EXAM_CONFIDENCE = 0.75;
 
 type LetterState = 'pending' | 'correct' | 'failed';
 
@@ -18,7 +20,7 @@ interface WordProgress {
 }
 
 export default function ExamenView() {
-  const { completedLetters, detection, onExamCompleted } = useLetter();
+  const { completedLetters, rawPrediction, onExamCompleted } = useLetter();
 
   const unlocked = completedLetters.length > 0
     ? completedLetters
@@ -31,6 +33,9 @@ export default function ExamenView() {
   const [finished, setFinished]       = useState(false);
   const [feedback, setFeedback]       = useState<'correct' | 'wrong' | null>(null);
   const lastConfirmedId               = useRef(0);
+  // Local streak for exam — independent of global context
+  const examStreakRef  = useRef<string[]>([]);
+  const examCooldownRef = useRef<number>(0);
 
   const startExam = () => {
     const words    = getRandomWords(unlocked, WORDS_PER_EXAM);
@@ -78,28 +83,49 @@ export default function ExamenView() {
     }, 900);
   };
 
+  // Reset streak when target letter changes
+  const prevExamLetterRef = useRef('');
   useEffect(() => {
-    if (
-      detection.confirmedId === 0 ||
-      detection.confirmedId === lastConfirmedId.current ||
-      !currentLetter || finished || feedback
-    ) return;
-
-    lastConfirmedId.current = detection.confirmedId;
-
-    if (detection.letter === currentLetter) {
-      speak(phrases.examLetterCorrect(currentLetter));
-      setFeedback('correct');
-      advance('correct');
-    } else {
-      const next = attempts + 1;
-      setAttempts(next);
-      if (next >= MAX_ATTEMPTS) {
-        setFeedback('wrong');
-        advance('failed');
-      }
+    if (currentLetter !== prevExamLetterRef.current) {
+      prevExamLetterRef.current = currentLetter;
+      examStreakRef.current     = [];
+      examCooldownRef.current   = 0;
     }
-  }, [detection.confirmedId]);
+  }, [currentLetter]);
+
+  // Independent streak-based detection for Exam mode
+  useEffect(() => {
+    if (!rawPrediction || !currentLetter || finished || feedback) return;
+    if (Date.now() - examCooldownRef.current < 1500) return;
+
+    const { letter, confidence } = rawPrediction;
+
+    if (confidence >= EXAM_CONFIDENCE) {
+      const buf = examStreakRef.current;
+      buf.push(letter);
+      if (buf.length > EXAM_STREAK) buf.shift();
+
+      if (buf.length === EXAM_STREAK && new Set(buf).size === 1) {
+        examStreakRef.current   = [];
+        examCooldownRef.current = Date.now();
+
+        if (buf[0] === currentLetter) {
+          speak(phrases.examLetterCorrect(currentLetter));
+          setFeedback('correct');
+          advance('correct');
+        } else {
+          const next = attempts + 1;
+          setAttempts(next);
+          if (next >= MAX_ATTEMPTS) {
+            setFeedback('wrong');
+            advance('failed');
+          }
+        }
+      }
+    } else {
+      examStreakRef.current = [];
+    }
+  }, [rawPrediction]);
 
   if (finished) {
     return (

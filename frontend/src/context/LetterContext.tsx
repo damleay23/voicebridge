@@ -1,26 +1,16 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react';
+import * as tf from '@tensorflow/tfjs';
 import { ALPHABET, LetterData } from '../data/alphabet';
 import { ACHIEVEMENTS, AchievementStats } from '../data/achievements';
 import { speak, phrases } from '../hooks/useVoice';
 import { HandLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 
-const REQUIRED_CORRECT = 5;
-const XP_PER_CORRECT   = 10;
-const XP_PER_COMPLETE  = 50;
-
-// WS URL: use env var if set, otherwise auto-detect host so it works on
-// any device on the same network (mobile, tablet, etc.)
-const WS_URL = (() => {
-  const env = import.meta.env.VITE_WS_URL as string | undefined;
-  if (env) return env;
-  // In production (Vercel) there's no local backend — return a dummy URL
-  // so the app loads without crashing; WS will just show "Disconnected"
-  if (import.meta.env.PROD) return 'wss://voicebridge-backend.example.com/ws';
-  // In dev: use the same host as the page (works for LAN mobile access)
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const host  = window.location.hostname;
-  return `${proto}//${host}:3000/ws`;
-})();
+const REQUIRED_CORRECT   = 5;
+const XP_PER_CORRECT     = 10;
+const XP_PER_COMPLETE    = 50;
+const CONFIDENCE_THRESHOLD = 0.75;
+const CONFIRM_STREAK     = 5;       // consecutive same predictions to confirm
+const DETECTION_COOLDOWN = 3000;    // ms between confirmed detections
 
 export interface DetectionResult {
   letter: string;
@@ -71,7 +61,7 @@ interface LetterContextType {
   dismissNotification: (id: string) => void;
   stream: MediaStream | null;
   cameraActive: boolean;
-  wsConnected: boolean;
+  wsConnected: boolean;   // kept for UI compat — now means "model ready"
   handDetected: boolean;
   toggleCamera: () => void;
   landmarks: Landmark[];
@@ -94,28 +84,27 @@ export function LetterProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications]       = useState<Notification[]>([]);
   const [stream, setStream]                     = useState<MediaStream | null>(null);
   const [cameraActive, setCameraActive]         = useState(false);
-  const [wsConnected, setWsConnected]           = useState(false);
+  const [modelReady, setModelReady]             = useState(false);
   const [handDetected, setHandDetected]         = useState(false);
-  const [landmarks, setLandmarks]               = useState<Landmark[]>([]); 
+  const [landmarks, setLandmarks]               = useState<Landmark[]>([]);
 
-  // Refs for mutable values that don't need re-renders
+  // Refs
   const activeIndexRef     = useRef(1);
   const completedRef       = useRef<string[]>([]);
   const attemptsRef        = useRef(0);
-  const wsRef              = useRef<WebSocket | null>(null);
   const streamRef          = useRef<MediaStream | null>(null);
   const rafRef             = useRef<number>(0);
   const videoRef           = useRef<HTMLVideoElement>(document.createElement('video'));
   const landmarkerRef      = useRef<HandLandmarker | null>(null);
   const landmarkerReadyRef = useRef(false);
-  // Cooldown: timestamp (ms) de la última detección confirmada
+  const modelRef           = useRef<tf.LayersModel | null>(null);
+  const classesRef         = useRef<string[]>([]);
+  const streakBufRef       = useRef<string[]>([]);   // confirmation streak buffer
   const lastDetectionTs    = useRef<number>(0);
-  const DETECTION_COOLDOWN = 3000; // 3 segundos entre detecciones
 
   const level           = calcLevel(xp);
   const progressPercent = Math.round((completedLetters.length / ALPHABET.length) * 100);
 
-  // Keep refs in sync with state
   useEffect(() => { activeIndexRef.current = activeIndex; }, [activeIndex]);
   useEffect(() => { completedRef.current = completedLetters; }, [completedLetters]);
   useEffect(() => { attemptsRef.current = correctAttempts; }, [correctAttempts]);
@@ -150,18 +139,16 @@ export function LetterProvider({ children }: { children: ReactNode }) {
     });
   }, [pushNotification]);
 
-  // ── Core detection handler (single source of truth) ───────
+  // ── Core detection handler ────────────────────────────────
   const handleConfirmedDetection = useCallback((letter: string, confidence: number) => {
     const idx    = activeIndexRef.current;
     const target = ALPHABET[idx].letter;
     if (letter !== target) return;
 
-    // Cooldown: ignorar si no han pasado 3 segundos desde la última detección
     const now = Date.now();
     if (now - lastDetectionTs.current < DETECTION_COOLDOWN) return;
     lastDetectionTs.current = now;
 
-    // 🔊 Say the letter
     speak(phrases.letterDetected(letter));
 
     const nextAttempts = attemptsRef.current + 1;
@@ -184,7 +171,6 @@ export function LetterProvider({ children }: { children: ReactNode }) {
           subtitle: `You completed all ${REQUIRED_CORRECT} attempts correctly.`,
           icon: '✋',
         });
-        // 🔊 Unlock message (delayed so it doesn't overlap with letter name)
         setTimeout(() => speak(phrases.letterUnlocked(letter)), 1200);
         checkAchievements({
           completedLetters: newCompleted,
@@ -201,7 +187,8 @@ export function LetterProvider({ children }: { children: ReactNode }) {
   const resetLetter = useCallback((idx: number) => {
     activeIndexRef.current = idx;
     attemptsRef.current = 0;
-    lastDetectionTs.current = 0; // reset cooldown al cambiar de letra
+    lastDetectionTs.current = 0;
+    streakBufRef.current = [];
     setActiveIndex(idx);
     setCorrectAttempts(0);
     setDetection(MOCK_DETECTION);
@@ -212,15 +199,8 @@ export function LetterProvider({ children }: { children: ReactNode }) {
     if (idx !== -1) resetLetter(idx);
   }, [resetLetter]);
 
-  const goToNext = useCallback(() => {
-    const next = (activeIndexRef.current + 1) % ALPHABET.length;
-    resetLetter(next);
-  }, [resetLetter]);
-
-  const goToPrev = useCallback(() => {
-    const next = (activeIndexRef.current - 1 + ALPHABET.length) % ALPHABET.length;
-    resetLetter(next);
-  }, [resetLetter]);
+  const goToNext = useCallback(() => resetLetter((activeIndexRef.current + 1) % ALPHABET.length), [resetLetter]);
+  const goToPrev = useCallback(() => resetLetter((activeIndexRef.current - 1 + ALPHABET.length) % ALPHABET.length), [resetLetter]);
 
   // ── Exam ──────────────────────────────────────────────────
   const onExamCompleted = useCallback((score: number) => {
@@ -238,57 +218,60 @@ export function LetterProvider({ children }: { children: ReactNode }) {
     checkAchievements({ completedLetters, xp, streak, examsCompleted: newExams, examsPerfect: newPerfect });
   }, [examsCompleted, examsPerfect, completedLetters, xp, streak, checkAchievements, pushNotification]);
 
-  // ── WebSocket ─────────────────────────────────────────────
-  const connectWS = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
-    ws.onopen  = () => setWsConnected(true);
-    ws.onclose = () => {
-      setWsConnected(false);
-      setHandDetected(false);
-      setTimeout(connectWS, 3000);
-    };
-    ws.onerror = () => {};
-    ws.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (!data.hand_detected) {
-          setDetection(MOCK_DETECTION);
-          return;
-        }
-        const result: DetectionResult = {
-          letter:     data.prediction,
-          confidence: data.confidence,
-          detected:   data.confirmed === true,
-        };
-        setDetection(result);
-        if (data.confirmed) {
-          handleConfirmedDetection(data.prediction, data.confidence);
-        }
-      } catch {}
-    };
-  }, [handleConfirmedDetection]);
-
-  // ── MediaPipe HandLandmarker (carga una sola vez) ────────
+  // ── Load TF.js model from /model/model.json ───────────────
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const vision = await FilesetResolver.forVisionTasks(
-        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
-      );
-      const hl = await HandLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath:
-            'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
-          delegate: 'GPU',
-        },
-        runningMode: 'VIDEO',
-        numHands: 1,
-      });
-      if (!cancelled) {
-        landmarkerRef.current = hl;
-        landmarkerReadyRef.current = true;
+      try {
+        console.log('[TF] Loading model...');
+        const m = await tf.loadLayersModel('/model/model.json');
+        if (cancelled) return;
+        modelRef.current = m;
+
+        // Extract classes from userDefinedMetadata in model.json
+        const resp = await fetch('/model/model.json');
+        const json = await resp.json();
+        const cls: string[] = json?.userDefinedMetadata?.classes ?? [];
+        classesRef.current = cls;
+
+        // Warm up — run one dummy inference so first real one is fast
+        const dummy = tf.zeros([1, 63]);
+        m.predict(dummy);
+        dummy.dispose();
+
+        setModelReady(true);
+        console.log(`[TF] Model ready. Classes: ${cls.join(', ')}`);
+      } catch (e) {
+        console.error('[TF] Failed to load model:', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // ── Load MediaPipe HandLandmarker ─────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const vision = await FilesetResolver.forVisionTasks(
+          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+        );
+        const hl = await HandLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+            delegate: 'GPU',
+          },
+          runningMode: 'VIDEO',
+          numHands: 1,
+        });
+        if (!cancelled) {
+          landmarkerRef.current = hl;
+          landmarkerReadyRef.current = true;
+          console.log('[MediaPipe] HandLandmarker ready');
+        }
+      } catch (e) {
+        console.error('[MediaPipe] Failed to load:', e);
       }
     })();
     return () => { cancelled = true; };
@@ -297,41 +280,21 @@ export function LetterProvider({ children }: { children: ReactNode }) {
   // ── Camera ────────────────────────────────────────────────
   const startCamera = useCallback(async () => {
     if (streamRef.current) return;
-    try {
-      // Use 'ideal' constraints so mobile cameras don't throw OverconstrainedError.
-      // Also try environment camera first on mobile (rear), fall back to user (front).
-      const s = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width:      { ideal: 640 },
-          height:     { ideal: 480 },
-          facingMode: { ideal: 'user' },
-          frameRate:  { ideal: 30, max: 60 },
-        },
-      });
+    const tryGet = async (constraints: MediaStreamConstraints) => {
+      const s = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = s;
       const video = videoRef.current;
       video.srcObject = s;
       video.muted = true;
-      video.setAttribute('playsinline', 'true'); // required for iOS Safari
+      video.setAttribute('playsinline', 'true');
       await video.play();
       setStream(s);
       setCameraActive(true);
-    } catch (e) {
-      console.warn('[Camera]', e);
-      // Try again with minimal constraints (some mobile browsers are strict)
-      try {
-        const s = await navigator.mediaDevices.getUserMedia({ video: true });
-        streamRef.current = s;
-        const video = videoRef.current;
-        video.srcObject = s;
-        video.muted = true;
-        video.setAttribute('playsinline', 'true');
-        await video.play();
-        setStream(s);
-        setCameraActive(true);
-      } catch (e2) {
-        console.warn('[Camera] fallback also failed:', e2);
-      }
+    };
+    try {
+      await tryGet({ video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: { ideal: 'user' }, frameRate: { ideal: 30 } } });
+    } catch {
+      try { await tryGet({ video: true }); } catch (e) { console.warn('[Camera] failed:', e); }
     }
   }, []);
 
@@ -348,69 +311,93 @@ export function LetterProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const toggleCamera = useCallback(() => {
-    if (streamRef.current) stopCamera();
-    else startCamera();
+    if (streamRef.current) stopCamera(); else startCamera();
   }, [startCamera, stopCamera]);
 
-  // ── rAF loop: MediaPipe → landmarks → WS ─────────────────
-  // Runs as long as the component is mounted; sends only when camera + WS are ready.
+  // ── rAF loop: MediaPipe → TF.js classify (no WebSocket) ──
   useEffect(() => {
     let lastTs = -1;
 
     const loop = (now: number) => {
       rafRef.current = requestAnimationFrame(loop);
 
-      const ws      = wsRef.current;
-      const video   = videoRef.current;
-      const hl      = landmarkerRef.current;
+      const video = videoRef.current;
+      const hl    = landmarkerRef.current;
+      const model = modelRef.current;
 
-      // Only process when everything is ready
       if (
-        !hl ||
-        !landmarkerReadyRef.current ||
-        !streamRef.current ||
-        video.readyState < 2 ||
-        !ws ||
-        ws.readyState !== WebSocket.OPEN
+        !hl || !landmarkerReadyRef.current ||
+        !streamRef.current || video.readyState < 2 ||
+        !model
       ) return;
 
-      // Throttle to ~20 fps (50 ms between frames)
+      // ~20 fps
       if (now - lastTs < 50) return;
       lastTs = now;
 
-      // Run MediaPipe directly on the video element — no canvas, no JPEG
+      // MediaPipe hand detection
       const result = hl.detectForVideo(video, now);
 
       if (!result.landmarks || result.landmarks.length === 0) {
         setHandDetected(false);
         setDetection(MOCK_DETECTION);
         setLandmarks([]);
-        ws.send(JSON.stringify({ hand_detected: false }));
+        streakBufRef.current = [];
         return;
       }
 
-      const lms = result.landmarks[0]; // 21 landmarks [{x,y,z}, ...]
+      const lms = result.landmarks[0];
       setHandDetected(true);
       setLandmarks(lms);
 
-      // Si estamos en cooldown post-detección, no enviar al servidor
+      // Cooldown — skip classification but keep overlay
       if (Date.now() - lastDetectionTs.current < DETECTION_COOLDOWN) return;
 
-      // Flatten to 63 numbers — same format as the Python training code
+      // Flatten 21 landmarks → 63 floats
       const flat = lms.flatMap(lm => [lm.x, lm.y, lm.z]);
-      ws.send(JSON.stringify({ landmarks: flat }));
+
+      // TF.js inference (synchronous — fast for this tiny model)
+      const inputTensor = tf.tensor2d([flat], [1, 63]);
+      const predTensor  = model.predict(inputTensor) as tf.Tensor;
+      const predArray   = predTensor.dataSync();
+      inputTensor.dispose();
+      predTensor.dispose();
+
+      const maxIdx    = predArray.indexOf(Math.max(...Array.from(predArray)));
+      const confidence = predArray[maxIdx];
+      const label     = classesRef.current[maxIdx] ?? '';
+
+      // Update detection display
+      setDetection({
+        letter:     label,
+        confidence: confidence,
+        detected:   confidence >= CONFIDENCE_THRESHOLD,
+      });
+
+      // Confirmation streak logic (same as server.py)
+      if (confidence >= CONFIDENCE_THRESHOLD) {
+        const buf = streakBufRef.current;
+        buf.push(label);
+        if (buf.length > CONFIRM_STREAK) buf.shift();
+
+        if (buf.length === CONFIRM_STREAK && new Set(buf).size === 1) {
+          streakBufRef.current = [];
+          handleConfirmedDetection(label, confidence);
+        }
+      } else {
+        streakBufRef.current = [];
+      }
     };
 
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
-  }, []);
+  }, [handleConfirmedDetection]);
 
+  // ── Auto-start camera on mount ────────────────────────────
   useEffect(() => {
-    connectWS();
     startCamera();
     return () => {
       cancelAnimationFrame(rafRef.current);
-      wsRef.current?.close();
       streamRef.current?.getTracks().forEach(t => t.stop());
     };
   }, []);
@@ -424,7 +411,9 @@ export function LetterProvider({ children }: { children: ReactNode }) {
       xp, streak, level, progressPercent,
       unlockedAchievements, examsCompleted, examsPerfect, onExamCompleted,
       notifications, dismissNotification,
-      stream, cameraActive, wsConnected, handDetected, toggleCamera, landmarks,
+      stream, cameraActive,
+      wsConnected: modelReady,  // reuse wsConnected field → now means "model ready"
+      handDetected, toggleCamera, landmarks,
     }}>
       {children}
     </LetterContext.Provider>

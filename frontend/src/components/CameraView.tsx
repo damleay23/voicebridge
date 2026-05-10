@@ -47,7 +47,7 @@ export default function CameraView() {
       {cameraActive && !handDetected && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <span className="text-slate-700 text-xs md:text-sm text-center px-4">
-            {wsConnected ? 'Show your hand to the camera' : 'Connecting to backend...'}
+            {wsConnected ? 'Show your hand to the camera' : 'Loading AI model...'}
           </span>
         </div>
       )}
@@ -69,7 +69,7 @@ export default function CameraView() {
               {detection.letter ? `${detection.letter} — ${Math.round(detection.confidence * 100)}%` : wsConnected ? 'Detecting...' : 'Disconnected'}
             </span>
             <span className="hidden md:block text-[11px] text-slate-400">
-              {wsConnected ? 'Backend connected' : 'Run server.py first'}
+              {wsConnected ? 'AI model ready' : 'Loading model...'}
             </span>
           </div>
         </div>

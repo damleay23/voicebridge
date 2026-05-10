@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.env
+*.egg-info/
+
+# Data & models (large files — add manually if needed)
+dataset/
+data_processed/
+players/
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/.env
+
+# Rust / Anchor
+target/
+.anchor/
+
+# OS
+.DS_Store
+Thumbs.db

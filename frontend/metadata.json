@@ -1,0 +1,6 @@
+{
+  "name": "VoiceBridge",
+  "description": "Plataforma inteligente para aprender lengua de señas con IA y feedback en tiempo real.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": []
+}

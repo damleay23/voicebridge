@@ -15,7 +15,17 @@
 
 @layer base {
   body {
-    @apply bg-bg-dark text-slate-200 antialiased font-sans select-none overflow-hidden;
+    @apply bg-bg-dark text-slate-200 antialiased font-sans select-none;
+    /* overflow-hidden only on desktop; mobile needs scroll in some views */
+    overflow: hidden;
+    /* Use dynamic viewport height so mobile browser chrome doesn't cut content */
+    height: 100dvh;
+  }
+
+  /* Prevent iOS Safari bounce scroll */
+  html {
+    height: 100%;
+    overflow: hidden;
   }
 }
 

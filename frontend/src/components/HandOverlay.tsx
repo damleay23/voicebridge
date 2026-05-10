@@ -14,12 +14,12 @@ function drawHand(ctx: CanvasRenderingContext2D, w: number, h: number, lms: Land
   ctx.clearRect(0, 0, w, h);
   if (lms.length === 0) return;
 
-  const px = (lm: Landmark) => (1 - lm.x) * w;
+  const px = (lm: Landmark) => (1 - lm.x) * w; // mirrored X
   const py = (lm: Landmark) => lm.y * h;
 
   // Connections
   ctx.strokeStyle = 'rgba(0, 210, 255, 0.75)';
-  ctx.lineWidth = 2;
+  ctx.lineWidth   = Math.max(1.5, w / 320); // scale line width with canvas size
   CONNECTIONS.forEach(([a, b]) => {
     if (!lms[a] || !lms[b]) return;
     ctx.beginPath();
@@ -28,31 +28,47 @@ function drawHand(ctx: CanvasRenderingContext2D, w: number, h: number, lms: Land
     ctx.stroke();
   });
 
-  // Dots
-  const TIPS = new Set([4, 8, 12, 16, 20]);
+  // Dots — scale radius with canvas size
+  const TIPS    = new Set([4, 8, 12, 16, 20]);
+  const tipR    = Math.max(4, w / 80);
+  const jointR  = Math.max(3, w / 120);
+
   lms.forEach((lm, i) => {
     ctx.beginPath();
-    ctx.arc(px(lm), py(lm), TIPS.has(i) ? 6 : 4, 0, Math.PI * 2);
-    ctx.fillStyle = TIPS.has(i) ? '#3b82f6' : 'rgba(0,210,255,0.9)';
+    ctx.arc(px(lm), py(lm), TIPS.has(i) ? tipR : jointR, 0, Math.PI * 2);
+    ctx.fillStyle   = TIPS.has(i) ? '#3b82f6' : 'rgba(0,210,255,0.9)';
     ctx.fill();
     ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-    ctx.lineWidth = 1;
+    ctx.lineWidth   = 1;
     ctx.stroke();
   });
 }
 
 export default function HandOverlay() {
   const { landmarks } = useLetter();
-  const canvasRef  = useRef<HTMLCanvasElement>(null);
-  const landmarksRef = useRef<Landmark[]>([]);
-  const rafRef     = useRef<number>(0);
+  const canvasRef     = useRef<HTMLCanvasElement>(null);
+  const landmarksRef  = useRef<Landmark[]>([]);
+  const rafRef        = useRef<number>(0);
 
-  // Keep ref in sync without triggering re-renders
+  useEffect(() => { landmarksRef.current = landmarks; }, [landmarks]);
+
+  // Resize canvas to match its CSS display size (handles any screen size)
   useEffect(() => {
-    landmarksRef.current = landmarks;
-  }, [landmarks]);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
-  // Single rAF loop — runs independently of React renders
+    const ro = new ResizeObserver(() => {
+      const { width, height } = canvas.getBoundingClientRect();
+      if (canvas.width !== Math.round(width) || canvas.height !== Math.round(height)) {
+        canvas.width  = Math.round(width);
+        canvas.height = Math.round(height);
+      }
+    });
+    ro.observe(canvas);
+    return () => ro.disconnect();
+  }, []);
+
+  // rAF draw loop
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -63,15 +79,12 @@ export default function HandOverlay() {
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
-
     return () => cancelAnimationFrame(rafRef.current);
   }, []);
 
   return (
     <canvas
       ref={canvasRef}
-      width={640}
-      height={480}
       className="absolute inset-0 w-full h-full pointer-events-none z-20"
     />
   );

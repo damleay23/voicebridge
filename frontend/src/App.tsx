@@ -27,7 +27,6 @@ export default function App() {
 
   const handleDockChange = (dock: DockTab) => {
     setActiveDock(dock);
-    // When going back to home, reset to learn tab
     if (dock === 'home') setActiveTab('aprender');
   };
 
@@ -35,7 +34,10 @@ export default function App() {
 
   return (
     <LetterProvider>
-      <div className="flex h-screen bg-bg-dark text-slate-200 font-sans overflow-hidden">
+      {/* Desktop: flex-row  |  Mobile: flex-col with bottom nav */}
+      <div className="flex flex-col md:flex-row h-[100dvh] bg-bg-dark text-slate-200 font-sans overflow-hidden">
+
+        {/* Sidebar — hidden on mobile (replaced by bottom nav inside Sidebar) */}
         <Sidebar
           activeTab={activeTab}
           onTabChange={(tab) => { setActiveTab(tab); setActiveDock('home'); }}
@@ -43,7 +45,8 @@ export default function App() {
           onDockChange={handleDockChange}
         />
 
-        <main className="flex-1 flex flex-col min-w-0">
+        {/* Main content area */}
+        <main className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
           <Header activeTab={activeTab} activeDock={activeDock} />
 
           <AnimatePresence mode="wait">
@@ -65,18 +68,33 @@ export default function App() {
               </motion.div>
             )}
 
-            {/* Main tabs */}
+            {/* Learn tab — desktop: camera + right panel side by side | mobile: stacked */}
             {showMainContent && activeTab === 'aprender' && (
               <motion.div key="aprender"
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }} className="flex-1 flex flex-col min-h-0">
-                <div className="flex-1 flex px-8 pb-0 space-x-6 min-h-0 overflow-hidden">
-                  <div className="flex-1 flex flex-col space-y-6 min-h-0">
+                transition={{ duration: 0.2 }} className="flex-1 flex flex-col min-h-0 overflow-hidden">
+
+                {/* Camera + panels */}
+                <div className="flex-1 flex flex-col md:flex-row px-3 md:px-8 pb-0 gap-3 md:gap-6 min-h-0 overflow-hidden">
+                  {/* Camera column */}
+                  <div className="flex-1 flex flex-col gap-3 md:gap-6 min-h-0">
                     <CameraView />
-                    <ControlPanel />
+                    {/* ControlPanel hidden on mobile to save space — shown below camera */}
+                    <div className="hidden md:block">
+                      <ControlPanel />
+                    </div>
                   </div>
-                  <RightPanel />
+                  {/* Right panel — hidden on mobile */}
+                  <div className="hidden md:block">
+                    <RightPanel />
+                  </div>
                 </div>
+
+                {/* Mobile ControlPanel — compact version below camera */}
+                <div className="md:hidden px-3 pb-1">
+                  <ControlPanel />
+                </div>
+
                 <AlphabetBar />
               </motion.div>
             )}
@@ -84,7 +102,7 @@ export default function App() {
             {showMainContent && activeTab === 'practica' && (
               <motion.div key="practica"
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }} className="flex-1 min-h-0">
+                transition={{ duration: 0.2 }} className="flex-1 min-h-0 overflow-hidden">
                 <PracticaView />
               </motion.div>
             )}
@@ -92,7 +110,7 @@ export default function App() {
             {showMainContent && activeTab === 'examen' && (
               <motion.div key="examen"
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }} className="flex-1 min-h-0">
+                transition={{ duration: 0.2 }} className="flex-1 min-h-0 overflow-hidden">
                 <ExamenView />
               </motion.div>
             )}
@@ -100,14 +118,13 @@ export default function App() {
             {showMainContent && activeTab === 'libre' && (
               <motion.div key="libre"
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }} className="flex-1 min-h-0">
+                transition={{ duration: 0.2 }} className="flex-1 min-h-0 overflow-hidden">
                 <LibreView />
               </motion.div>
             )}
           </AnimatePresence>
         </main>
 
-        {/* Notification toasts */}
         <NotificationToast />
 
         {/* Background Glows */}

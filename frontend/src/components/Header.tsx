@@ -21,9 +21,9 @@ export default function Header({ activeTab, activeDock }: { activeTab: TabId; ac
   const Icon   = mode.icon;
 
   return (
-    <header className="flex items-center h-20 px-8">
+    <header className="hidden md:flex items-center h-16 px-8 flex-shrink-0">
       <div className="flex items-center space-x-2 bg-white/5 border border-white/10 rounded-full px-4 py-2">
-        <Icon size={18} className="text-brand-blue" />
+        <Icon size={16} className="text-brand-blue" />
         <span className="text-sm font-medium text-slate-200">
           {isHome ? `Mode: ${mode.label}` : mode.label}
         </span>

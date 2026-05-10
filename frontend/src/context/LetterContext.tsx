@@ -7,7 +7,20 @@ import { HandLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 const REQUIRED_CORRECT = 5;
 const XP_PER_CORRECT   = 10;
 const XP_PER_COMPLETE  = 50;
-const WS_URL           = 'ws://localhost:3000/ws';
+
+// WS URL: use env var if set, otherwise auto-detect host so it works on
+// any device on the same network (mobile, tablet, etc.)
+const WS_URL = (() => {
+  const env = import.meta.env.VITE_WS_URL as string | undefined;
+  if (env) return env;
+  // In production (Vercel) there's no local backend — return a dummy URL
+  // so the app loads without crashing; WS will just show "Disconnected"
+  if (import.meta.env.PROD) return 'wss://voicebridge-backend.example.com/ws';
+  // In dev: use the same host as the page (works for LAN mobile access)
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const host  = window.location.hostname;
+  return `${proto}//${host}:3000/ws`;
+})();
 
 export interface DetectionResult {
   letter: string;
@@ -285,17 +298,41 @@ export function LetterProvider({ children }: { children: ReactNode }) {
   const startCamera = useCallback(async () => {
     if (streamRef.current) return;
     try {
+      // Use 'ideal' constraints so mobile cameras don't throw OverconstrainedError.
+      // Also try environment camera first on mobile (rear), fall back to user (front).
       const s = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480, facingMode: 'user' },
+        video: {
+          width:      { ideal: 640 },
+          height:     { ideal: 480 },
+          facingMode: { ideal: 'user' },
+          frameRate:  { ideal: 30, max: 60 },
+        },
       });
       streamRef.current = s;
       const video = videoRef.current;
       video.srcObject = s;
       video.muted = true;
+      video.setAttribute('playsinline', 'true'); // required for iOS Safari
       await video.play();
       setStream(s);
       setCameraActive(true);
-    } catch (e) { console.warn('[Camera]', e); }
+    } catch (e) {
+      console.warn('[Camera]', e);
+      // Try again with minimal constraints (some mobile browsers are strict)
+      try {
+        const s = await navigator.mediaDevices.getUserMedia({ video: true });
+        streamRef.current = s;
+        const video = videoRef.current;
+        video.srcObject = s;
+        video.muted = true;
+        video.setAttribute('playsinline', 'true');
+        await video.play();
+        setStream(s);
+        setCameraActive(true);
+      } catch (e2) {
+        console.warn('[Camera] fallback also failed:', e2);
+      }
+    }
   }, []);
 
   const stopCamera = useCallback(() => {

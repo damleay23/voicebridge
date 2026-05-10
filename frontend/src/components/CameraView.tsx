@@ -16,92 +16,83 @@ export default function CameraView() {
     } else {
       video.srcObject = null;
     }
-  }, [stream, cameraActive]); // also watch cameraActive to re-trigger on toggle
+  }, [stream, cameraActive]);
 
   return (
-    <div className="relative flex-1 bg-black rounded-[40px] overflow-hidden group">
+    <div className="relative flex-1 bg-black rounded-2xl md:rounded-[40px] overflow-hidden group min-h-0">
 
-      {/* Video real */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted
-        className="w-full h-full object-cover"
+        className="absolute inset-0 w-full h-full object-cover"
         style={{ transform: 'scaleX(-1)' }}
       />
 
-      {/* Canvas oculto — no longer needed here, handled in context */}
-
-      {/* Camera off — show background image */}
+      {/* Camera off */}
       {!cameraActive && (
         <div className="absolute inset-0 z-10">
-          <img
-            src="/camera-bg.png"
-            alt="Camera off"
-            className="w-full h-full object-contain"
-            style={{ background: '#020617' }}
-          />
+          <img src="/camera-bg.png" alt="Camera off" className="w-full h-full object-contain" style={{ background: '#020617' }} />
           <div className="absolute inset-0 flex flex-col items-center justify-center space-y-2 bg-black/30">
+            <VideoOff size={32} className="text-white/60" />
             <span className="text-white/60 text-sm font-medium">Camera is off</span>
           </div>
         </div>
       )}
 
-      {/* Hand landmarks overlay */}
       <HandOverlay />
 
-      {/* Sin mano */}
+      {/* No hand */}
       {cameraActive && !handDetected && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <span className="text-slate-700 text-sm">
+          <span className="text-slate-700 text-xs md:text-sm text-center px-4">
             {wsConnected ? 'Show your hand to the camera' : 'Connecting to backend...'}
           </span>
         </div>
       )}
 
-      {/* HUD Corners */}
-      <div className="absolute top-1/4 left-1/4 w-40 h-40 pointer-events-none">
-        <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-cyan-400 rounded-tl-lg" />
-        <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-cyan-400 rounded-tr-lg" />
-        <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-cyan-400 rounded-bl-lg" />
-        <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-cyan-400 rounded-br-lg" />
+      {/* HUD Corners — responsive, percentage-based */}
+      <div className="absolute top-[20%] left-[20%] right-[20%] bottom-[20%] pointer-events-none">
+        <div className="absolute top-0 left-0 w-6 h-6 md:w-8 md:h-8 border-t-4 border-l-4 border-cyan-400 rounded-tl-lg" />
+        <div className="absolute top-0 right-0 w-6 h-6 md:w-8 md:h-8 border-t-4 border-r-4 border-cyan-400 rounded-tr-lg" />
+        <div className="absolute bottom-0 left-0 w-6 h-6 md:w-8 md:h-8 border-b-4 border-l-4 border-cyan-400 rounded-bl-lg" />
+        <div className="absolute bottom-0 right-0 w-6 h-6 md:w-8 md:h-8 border-b-4 border-r-4 border-cyan-400 rounded-br-lg" />
       </div>
 
-      {/* Estado conexión */}
-      <div className="absolute top-6 right-6">
-        <div className="bg-black/60 backdrop-blur-xl border border-white/10 px-4 py-3 rounded-2xl flex items-center space-x-3">
-          {wsConnected ? <Wifi size={14} className="text-green-400" /> : <WifiOff size={14} className="text-red-400" />}
+      {/* Connection badge */}
+      <div className="absolute top-3 right-3 md:top-6 md:right-6 z-20">
+        <div className="bg-black/60 backdrop-blur-xl border border-white/10 px-2 py-1.5 md:px-4 md:py-3 rounded-xl md:rounded-2xl flex items-center space-x-2">
+          {wsConnected ? <Wifi size={12} className="text-green-400" /> : <WifiOff size={12} className="text-red-400" />}
           <div className="flex flex-col">
-            <span className="text-[10px] font-bold text-white uppercase tracking-wider">
+            <span className="text-[9px] md:text-[10px] font-bold text-white uppercase tracking-wider">
               {detection.letter ? `${detection.letter} — ${Math.round(detection.confidence * 100)}%` : wsConnected ? 'Detecting...' : 'Disconnected'}
             </span>
-            <span className="text-[11px] text-slate-400">
+            <span className="hidden md:block text-[11px] text-slate-400">
               {wsConnected ? 'Backend connected' : 'Run server.py first'}
             </span>
           </div>
         </div>
       </div>
 
-      {/* Controles inferiores — siempre visibles, alineados a la izquierda */}
-      <div className="absolute bottom-3 left-6 flex items-center space-x-3 z-30">
-        <div className="bg-black/60 backdrop-blur-xl border border-white/10 px-5 py-2.5 rounded-full flex items-center space-x-3">
-          <div className={`w-1.5 h-1.5 rounded-full ${handDetected ? 'bg-green-500' : 'bg-slate-600'}`} />
-          <span className="text-xs font-semibold text-white tracking-wide">
-            {handDetected ? 'Tracking active' : 'No hand detected'}
+      {/* Bottom controls */}
+      <div className="absolute bottom-3 left-3 md:bottom-3 md:left-6 flex items-center space-x-2 z-30">
+        <div className="bg-black/60 backdrop-blur-xl border border-white/10 px-3 py-1.5 md:px-5 md:py-2.5 rounded-full flex items-center space-x-2">
+          <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${handDetected ? 'bg-green-500' : 'bg-slate-600'}`} />
+          <span className="text-[10px] md:text-xs font-semibold text-white tracking-wide">
+            {handDetected ? 'Tracking' : 'No hand'}
           </span>
         </div>
 
         <button
           onClick={toggleCamera}
-          className={`p-3 backdrop-blur-md border rounded-2xl transition-colors ${
+          className={`p-2 md:p-3 backdrop-blur-md border rounded-xl md:rounded-2xl transition-colors ${
             cameraActive
               ? 'bg-black/40 border-white/10 text-slate-300 hover:text-white hover:border-white/30'
               : 'bg-brand-blue/20 border-brand-blue/40 text-brand-blue hover:bg-brand-blue/30'
           }`}
-          title={cameraActive ? 'Turn off camera' : 'Turn on camera'}
         >
-          {cameraActive ? <Video size={20} /> : <VideoOff size={20} />}
+          {cameraActive ? <Video size={16} /> : <VideoOff size={16} />}
         </button>
       </div>
     </div>

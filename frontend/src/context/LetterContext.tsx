@@ -97,7 +97,7 @@ export function LetterProvider({ children }: { children: ReactNode }) {
   const videoRef           = useRef<HTMLVideoElement>(document.createElement('video'));
   const landmarkerRef      = useRef<HandLandmarker | null>(null);
   const landmarkerReadyRef = useRef(false);
-  const modelRef           = useRef<tf.LayersModel | null>(null);
+  const modelRef           = useRef<{ predict: (t: tf.Tensor) => tf.Tensor } | null>(null);
   const classesRef         = useRef<string[]>([]);
   const streakBufRef       = useRef<string[]>([]);   // confirmation streak buffer
   const lastDetectionTs    = useRef<number>(0);
@@ -218,29 +218,57 @@ export function LetterProvider({ children }: { children: ReactNode }) {
     checkAchievements({ completedLetters, xp, streak, examsCompleted: newExams, examsPerfect: newPerfect });
   }, [examsCompleted, examsPerfect, completedLetters, xp, streak, checkAchievements, pushNotification]);
 
-  // ── Load TF.js model from /model/model.json ───────────────
+  // ── Load model weights from /model/weights.json ─────────
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        console.log('[TF] Loading model...');
-        const m = await tf.loadLayersModel('/model/model.json');
-        if (cancelled) return;
-        modelRef.current = m;
+        console.log('[TF] Loading weights...');
+        const resp = await fetch('/model/weights.json');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
 
-        // Extract classes from userDefinedMetadata in model.json
-        const resp = await fetch('/model/model.json');
-        const json = await resp.json();
-        const cls: string[] = json?.userDefinedMetadata?.classes ?? [];
-        classesRef.current = cls;
+        // Build the network manually with TF.js — matches training architecture:
+        // Input(63) → Dense(128, relu) → Dropout(0.3) → Dense(64, relu) → Dropout(0.2) → Dense(29, softmax)
+        // Dropout is skipped at inference time (TF.js handles this automatically)
+        const layerMap: Record<string, { w: tf.Tensor; b: tf.Tensor }> = {};
+        for (const layer of data.layers) {
+          layerMap[layer.name] = {
+            w: tf.tensor(layer.weights[0]),
+            b: tf.tensor(layer.weights[1]),
+          };
+        }
 
-        // Warm up — run one dummy inference so first real one is fast
+        // Store a predict function in the ref
+        const predict = (input: tf.Tensor): tf.Tensor => {
+          // dense (63→128, relu)
+          let x = tf.add(tf.matMul(input, layerMap['dense'].w), layerMap['dense'].b);
+          x = tf.relu(x);
+          // dense_1 (128→64, relu)
+          x = tf.add(tf.matMul(x, layerMap['dense_1'].w), layerMap['dense_1'].b);
+          x = tf.relu(x);
+          // dense_2 (64→29, softmax)
+          x = tf.add(tf.matMul(x, layerMap['dense_2'].w), layerMap['dense_2'].b);
+          x = tf.softmax(x);
+          return x;
+        };
+
+        if (cancelled) {
+          Object.values(layerMap).forEach(l => { l.w.dispose(); l.b.dispose(); });
+          return;
+        }
+
+        // Wrap as a LayersModel-compatible object
+        (modelRef as any).current = { predict };
+        classesRef.current = data.classes;
+
+        // Warm up
         const dummy = tf.zeros([1, 63]);
-        m.predict(dummy);
+        predict(dummy);
         dummy.dispose();
 
         setModelReady(true);
-        console.log(`[TF] Model ready. Classes: ${cls.join(', ')}`);
+        console.log(`[TF] Model ready. Classes: ${data.classes.join(', ')}`);
       } catch (e) {
         console.error('[TF] Failed to load model:', e);
       }
@@ -356,10 +384,10 @@ export function LetterProvider({ children }: { children: ReactNode }) {
       // Flatten 21 landmarks → 63 floats
       const flat = lms.flatMap(lm => [lm.x, lm.y, lm.z]);
 
-      // TF.js inference (synchronous — fast for this tiny model)
+      // TF.js inference — manual forward pass
       const inputTensor = tf.tensor2d([flat], [1, 63]);
       const predTensor  = model.predict(inputTensor) as tf.Tensor;
-      const predArray   = predTensor.dataSync();
+      const predArray   = Array.from(predTensor.dataSync());
       inputTensor.dispose();
       predTensor.dispose();
 
